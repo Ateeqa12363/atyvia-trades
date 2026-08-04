@@ -1,0 +1,12 @@
+<svg width="680" height="480" viewBox="220 60 240 280" xmlns="http://www.w3.org/2000/svg" role="img">
+<title>Atyvia mark, bold shield, no wordmark</title>
+<desc>A bold hexagon outline in indigo to blue, with no text.</desc>
+<defs>
+<linearGradient id="g1c" x1="0%" y1="0%" x2="100%" y2="100%">
+<stop offset="0%" stop-color="#4338CA"/>
+<stop offset="100%" stop-color="#0EA5E9"/>
+</linearGradient>
+</defs>
+<polygon points="340,80 443.9,140 443.9,260 340,320 236.1,260 236.1,140" fill="none" stroke="url(#g1c)" stroke-width="18" stroke-linejoin="round"/>
+<polygon points="410,200 375,260.6 305,260.6 270,200 305,139.4 375,139.4" fill="none" stroke="url(#g1c)" stroke-width="8" stroke-linejoin="round" opacity="0.55"/>
+</svg>
