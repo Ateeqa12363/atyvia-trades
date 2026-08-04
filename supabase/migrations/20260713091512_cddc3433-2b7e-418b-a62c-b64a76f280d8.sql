@@ -1,0 +1,1 @@
+UPDATE public.subscriptions SET cancel_at_period_end = true, updated_at = now() WHERE user_id = 'a81b4360-2837-4375-a805-3986934911a4' AND environment = 'sandbox';
