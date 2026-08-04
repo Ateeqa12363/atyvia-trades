@@ -1,6 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
 import { requireSupabaseAuth } from "@/integrations/supabase/auth-middleware";
-
+import { getStripeEnvironment } from "@/lib/stripe";
 export type InvoiceLine = {
   description: string;
   quantity: number;
@@ -23,10 +23,11 @@ export const listInvoices = createServerFn({ method: "GET" })
     // --- auto-generate drafts from completed jobs ---
     const { data: completed } = await supabase
       .from("jobs")
-      .select("id, customer_name, address, phone, price, notes, scheduled_date, quote_id, site_visit_id")
+      .select(
+        "id, customer_name, address, phone, price, notes, scheduled_date, quote_id, site_visit_id",
+      )
       .eq("site_id", data.siteId)
       .eq("status", "completed");
-
 
     if (completed && completed.length > 0) {
       const { data: existing } = await supabase
@@ -62,7 +63,8 @@ export const listInvoices = createServerFn({ method: "GET" })
           .limit(400);
         const { sameName } = await import("@/lib/contact-match");
         const phoneFromCalls = (name: string | null) =>
-          (name ? (calls ?? []).find((c) => sameName(c.caller_name, name))?.from_number : null) ?? null;
+          (name ? (calls ?? []).find((c) => sameName(c.caller_name, name))?.from_number : null) ??
+          null;
 
         for (const job of missing) {
           // Mirror the accepted quote: same customer details and same line items.
@@ -159,7 +161,6 @@ export const listInvoices = createServerFn({ method: "GET" })
             })),
           );
         }
-
       }
     }
 
@@ -219,7 +220,7 @@ export const saveInvoice = createServerFn({ method: "POST" })
       phone: string | null;
       vat_rate: number;
       due_date: string | null;
-      
+
       notes: string | null;
       status?: InvoiceStatus;
       items: InvoiceLine[];
@@ -249,7 +250,7 @@ export const saveInvoice = createServerFn({ method: "POST" })
         phone: data.phone,
         vat_rate: data.vat_rate,
         due_date: data.due_date,
-        
+
         notes: data.notes,
         ...(data.status ? { status: data.status } : {}),
         subtotal,
@@ -272,7 +273,6 @@ export const saveInvoice = createServerFn({ method: "POST" })
         skip: { table: "invoices", id: data.id },
       });
     }
-
 
     await supabase.from("invoice_line_items").delete().eq("invoice_id", data.id);
     if (items.length > 0) {
@@ -343,10 +343,57 @@ export const approveAndSendInvoice = createServerFn({ method: "POST" })
     const logoUrl =
       settings?.logo_url && origin ? `${origin}/api/public/branding/logo/${invoice.site_id}` : null;
 
-
     const subtotal = Number(invoice.subtotal ?? 0);
     const vatRate = Number(invoice.vat_rate ?? 0);
     const vatAmount = Number(((subtotal * vatRate) / 100).toFixed(2));
+
+    let paymentLink: string | null = null;
+    try {
+      const activeEnv = getStripeEnvironment();
+      const { createStripeClient } = await import("@/lib/stripe.server");
+      const stripe = createStripeClient(activeEnv);
+
+      const sessionLineItems = (items ?? []).map((i) => ({
+        price_data: {
+          currency: "gbp",
+          product_data: {
+            name: i.description ?? "Invoice Item",
+          },
+          unit_amount: Math.round(Number(i.unit_price) * 100),
+        },
+        quantity: Number(i.quantity || 1),
+      }));
+
+      if (vatAmount > 0) {
+        sessionLineItems.push({
+          price_data: {
+            currency: "gbp",
+            product_data: {
+              name: `VAT (${vatRate}%)`,
+            },
+            unit_amount: Math.round(vatAmount * 100),
+          },
+          quantity: 1,
+        });
+      }
+
+      const session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        customer_email: recipient,
+        line_items: sessionLineItems,
+        success_url: `${origin}/api/public/payments/success?invoice_id=${invoice.id}`,
+        cancel_url: `${origin}/bookings/invoices`,
+        metadata: {
+          invoiceId: invoice.id,
+        },
+      });
+      paymentLink = session.url ?? null;
+    } catch (err) {
+      console.error("[approveAndSendInvoice] Stripe checkout session creation failed:", err);
+      throw new Error(
+        `Stripe session creation failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
 
     const { sendTemplateEmail } = await import("@/lib/email-templates/send-email");
     const result = await sendTemplateEmail("invoice", recipient, {
@@ -367,7 +414,7 @@ export const approveAndSendInvoice = createServerFn({ method: "POST" })
         vatAmount,
         total: Number(invoice.total ?? 0),
         notes: invoice.notes,
-        paymentLink: null,
+        paymentLink,
         paymentMethods: settings?.payment_methods || null,
         lineItems: (items ?? []).map((i) => ({
           description: i.description ?? "",
@@ -387,7 +434,12 @@ export const approveAndSendInvoice = createServerFn({ method: "POST" })
     const now = new Date().toISOString();
     await supabase
       .from("invoices")
-      .update({ status: "sent", approved_at: invoice.approved_at ?? now, sent_at: now, customer_email: recipient })
+      .update({
+        status: "sent",
+        approved_at: invoice.approved_at ?? now,
+        sent_at: now,
+        customer_email: recipient,
+      })
       .eq("id", invoice.id);
 
     if (invoice.job_id) {
